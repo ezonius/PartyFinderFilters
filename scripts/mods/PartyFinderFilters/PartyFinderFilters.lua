@@ -11,6 +11,7 @@ end
 local CUSTOM_TAG_PREFIX = "lf_class_"
 local CUSTOM_HAVOC_TAG_PREFIX = "lf_havoc_"
 local CUSTOM_HAVOC_RANK_TAG_PREFIX = "lf_havoc_rank_"
+local CUSTOM_BLOCKED_TAG_NAME = "lf_blocked"
 local CUSTOM_ROOT_TAG_NAME = "lf_class_filter"
 local CUSTOM_HAVOC_ROOT_TAG_NAME = "lf_havoc_filter"
 local CUSTOM_HAVOC_RANK_ROOT_TAG_NAME = "lf_havoc_rank_filter"
@@ -47,6 +48,7 @@ local HAVOC_RANK_LIST = {
 local selected_classes = {}
 local selected_havoc = {}
 local selected_havoc_rank = {}
+local filter_blocked_players = false
 local injected_tags = {}
 local update_timer = 0
 local active_group_finder_view = nil
@@ -67,6 +69,7 @@ local function is_custom_tag(tag_name)
     return string.sub(tag_name, 1, #CUSTOM_TAG_PREFIX) == CUSTOM_TAG_PREFIX
         or string.sub(tag_name, 1, #CUSTOM_HAVOC_TAG_PREFIX) == CUSTOM_HAVOC_TAG_PREFIX
         or string.sub(tag_name, 1, #CUSTOM_HAVOC_RANK_TAG_PREFIX) == CUSTOM_HAVOC_RANK_TAG_PREFIX
+        or tag_name == CUSTOM_BLOCKED_TAG_NAME
         or tag_name == CUSTOM_ROOT_TAG_NAME
         or tag_name == CUSTOM_HAVOC_ROOT_TAG_NAME
         or tag_name == CUSTOM_HAVOC_RANK_ROOT_TAG_NAME
@@ -101,10 +104,31 @@ local function create_custom_filters_root_tag()
         ui_category = "custom_filters",
         widget_type = "tag_default",
         text = mod:localize("custom_filters"),
-        unlocks = { CUSTOM_ROOT_TAG_NAME, CUSTOM_HAVOC_ROOT_TAG_NAME, CUSTOM_HAVOC_RANK_ROOT_TAG_NAME },
+        unlocks = { CUSTOM_ROOT_TAG_NAME, CUSTOM_HAVOC_ROOT_TAG_NAME, CUSTOM_HAVOC_RANK_ROOT_TAG_NAME, CUSTOM_BLOCKED_TAG_NAME },
         locked = false,
         mutually_exclusive = nil,
         parents = nil,
+        level_requirement = 0,
+        access_requirement = nil,
+        difficulty_requirement = nil,
+        display_mode = nil,
+        header = nil,
+        background_texture = nil,
+        difficulty = nil,
+    }
+end
+
+local function create_blocked_tag()
+    return {
+        name = CUSTOM_BLOCKED_TAG_NAME,
+        root_tag = false,
+        ui_category = "custom_filters",
+        widget_type = "tag_default",
+        text = mod:localize("filter_blocked"),
+        unlocks = nil,
+        locked = false,
+        mutually_exclusive = nil,
+        parents = { CUSTOM_FILTERS_ROOT_TAG_NAME },
         level_requirement = 0,
         access_requirement = nil,
         difficulty_requirement = nil,
@@ -294,6 +318,22 @@ local function group_has_filtered_havoc_rank(group_data)
     return true
 end
 
+local function group_has_blocked_player(group_data, social_service)
+    if not group_data or not group_data.members then return false end
+
+    local members = group_data.members
+    for i = 1, #members do
+        local account_id = members[i].account_id
+        if account_id and social_service then
+            local player_info = social_service:get_player_info_by_account_id(account_id)
+            if player_info and player_info:is_blocked() then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function filter_groups_by_custom_filters(groups)
     if not groups or #groups == 0 then return false end
 
@@ -315,7 +355,7 @@ local function filter_groups_by_custom_filters(groups)
         break
     end
 
-    if not has_class_selection and not has_havoc_selection and not has_havoc_rank_selection then return false end
+    if not has_class_selection and not has_havoc_selection and not has_havoc_rank_selection and not filter_blocked_players then return false end
 
     local social_service = Managers.data_service and Managers.data_service.social
     local needs_rebuild = false
@@ -323,7 +363,13 @@ local function filter_groups_by_custom_filters(groups)
         local group = groups[i]
         local filtered = false
 
-        if has_class_selection and social_service then
+        if filter_blocked_players and social_service then
+            if group_has_blocked_player(group, social_service) then
+                filtered = true
+            end
+        end
+
+        if not filtered and has_class_selection and social_service then
             if group_has_filtered_class(group, social_service) then
                 filtered = true
             end
@@ -504,6 +550,10 @@ mod:hook_safe("GroupFinderView", "_on_fetching_tags_complete", function(self)
     injected_tags[havoc_rank_root.name] = havoc_rank_root
     self._tags[#self._tags + 1] = havoc_rank_root
 
+    local blocked_tag = create_blocked_tag()
+    injected_tags[blocked_tag.name] = blocked_tag
+    self._tags[#self._tags + 1] = blocked_tag
+
     injected_tags[custom_filters_root.name] = custom_filters_root
     tags[#tags + 1] = custom_filters_root
 
@@ -523,32 +573,44 @@ mod:hook_safe("GroupFinderView", "_on_fetching_tags_complete", function(self)
         end
     end
 
-    if next(selected_classes) == nil and next(selected_havoc) == nil and next(selected_havoc_rank) == nil then
-        if mod:get("auto_check_class") then
-            local user_class = get_local_player_class()
-            if user_class then
-                selected_classes[string.lower(user_class)] = true
+    if mod:get("auto_check_class") then
+        local user_class = get_local_player_class()
+        if user_class then
+            local user_class_lower = string.lower(user_class)
+            -- Clear all classes in CLASS_LIST before applying the current one
+            for _, class_name in ipairs(CLASS_LIST) do
+                selected_classes[class_name] = nil
             end
-        end
 
+            selected_classes[user_class_lower] = true
+        end
+    else
         for _, class_name in ipairs(CLASS_LIST) do
             if mod:get("default_exclude_" .. class_name) then
                 selected_classes[class_name] = true
-            end
-        end
-
-        for _, havoc_name in ipairs(HAVOC_LIST) do
-            if mod:get("default_exclude_" .. havoc_name) then
-                selected_havoc[havoc_name] = true
-            end
-        end
-
-        for _, rank_name in ipairs(HAVOC_RANK_LIST) do
-            if mod:get("default_exclude_havoc_rank_" .. rank_name) then
-                selected_havoc_rank[rank_name] = true
+            else
+                selected_classes[class_name] = nil
             end
         end
     end
+
+    for _, havoc_name in ipairs(HAVOC_LIST) do
+        if mod:get("default_exclude_" .. havoc_name) then
+            selected_havoc[havoc_name] = true
+        else
+            selected_havoc[havoc_name] = nil
+        end
+    end
+
+    for _, rank_name in ipairs(HAVOC_RANK_LIST) do
+        if mod:get("default_exclude_havoc_rank_" .. rank_name) then
+            selected_havoc_rank[rank_name] = true
+        else
+            selected_havoc_rank[rank_name] = nil
+        end
+    end
+
+    filter_blocked_players = mod:get("default_exclude_blocked")
 
     self:_update_tag_grid()
     self:_update_tag_navigation_buttons_status()
@@ -583,6 +645,13 @@ mod:hook("GroupFinderView", "_cb_on_list_tag_pressed", function(func, self, elem
 
     if tag_name == CUSTOM_FILTERS_ROOT_TAG_NAME or tag_name == CUSTOM_ROOT_TAG_NAME or tag_name == CUSTOM_HAVOC_ROOT_TAG_NAME or tag_name == CUSTOM_HAVOC_RANK_ROOT_TAG_NAME then
         self:_handle_next_filter_button_options(tag)
+        return
+    end
+
+    if tag_name == CUSTOM_BLOCKED_TAG_NAME then
+        filter_blocked_players = not filter_blocked_players
+        self:_update_tag_widgets()
+        self:_reset_search()
         return
     end
 
@@ -657,6 +726,10 @@ mod:hook_safe("GroupFinderView", "_update_tag_widgets", function(self, clear_slo
                             local class_name = get_class_from_tag_name(tag_name)
                             if class_name then
                                 content.checked = selected_classes[class_name] == true
+                            else
+                                if tag_name == CUSTOM_BLOCKED_TAG_NAME then
+                                    content.checked = filter_blocked_players == true
+                                end
                             end
                         end
                     end
@@ -671,6 +744,9 @@ mod:hook_safe("GroupFinderView", "_update_tag_widgets", function(self, clear_slo
                         count = count + 1
                     end
                     for _, _ in pairs(selected_havoc_rank) do
+                        count = count + 1
+                    end
+                    if filter_blocked_players then
                         count = count + 1
                     end
 
@@ -752,6 +828,7 @@ mod:hook_safe("GroupFinderView", "cb_on_clear_pressed", function(self)
     selected_classes = {}
     selected_havoc = {}
     selected_havoc_rank = {}
+    filter_blocked_players = false
 end)
 
 mod:hook("GroupFinderView", "_get_page_descripion_by_category", function(func, self, category_name)

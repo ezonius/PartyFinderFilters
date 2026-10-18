@@ -122,6 +122,11 @@ return {
 						type = "checkbox",
 						default_value = false,
 					},
+					{
+						setting_id = "default_exclude_blocked",
+						type = "checkbox",
+						default_value = false,
+					},
 				}
 			},
 		}

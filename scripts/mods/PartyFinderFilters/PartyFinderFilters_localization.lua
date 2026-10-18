@@ -74,6 +74,9 @@ return {
     default_exclude_havoc_rank_30_40 = {
         en = "30-40",
     },
+    default_exclude_blocked = {
+        en = "Exclude Blocked",
+    },
 	class_veteran = {
 		en = "Veteran",
 	},
@@ -142,6 +145,12 @@ return {
     },
     filter_havoc_rank = {
         en = "Havoc Rank",
+    },
+    filter_blocked = {
+        en = "Exclude Blocked",
+    },
+    filter_blocked_description = {
+        en = "Exclude groups with blocked players",
     },
     havoc_rank_1_19 = {
         en = "1-19",
